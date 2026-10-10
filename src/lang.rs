@@ -137,7 +137,11 @@ fn resolve_lang(saved_lang: &str, locale: &str, cjk_fallback: bool) -> String {
     if lang.is_empty() {
         // zh_CN on Linux, zh-Hans-CN on mac, zh_CN_#Hans on Android
         if locale.starts_with("zh") {
-            lang = (if locale.contains("tw") {
+            lang = (if locale.contains("tw")
+                || locale.contains("hk")
+                || locale.contains("mo")
+                || locale.contains("hant")
+            {
                 "zh-tw"
             } else {
                 "zh-cn"

@@ -369,9 +369,20 @@ class MyTheme {
     }),
   );
 
+  static const List<String> cjkFontFamilyFallback = [
+    'PingFang SC',
+    'Microsoft YaHei',
+    'Noto Sans SC',
+    'Noto Sans CJK SC',
+    'Heiti SC',
+    'WenQuanYi Micro Hei',
+    'sans-serif',
+  ];
+
   static ThemeData lightTheme = ThemeData(
     // https://stackoverflow.com/questions/77537315/after-upgrading-to-flutter-3-16-the-app-bar-background-color-button-size-and
     useMaterial3: false,
+    fontFamilyFallback: cjkFontFamilyFallback,
     brightness: Brightness.light,
     hoverColor: Color.fromARGB(255, 224, 224, 224),
     scaffoldBackgroundColor: Colors.white,
@@ -470,6 +481,7 @@ class MyTheme {
   );
   static ThemeData darkTheme = ThemeData(
     useMaterial3: false,
+    fontFamilyFallback: cjkFontFamilyFallback,
     brightness: Brightness.dark,
     hoverColor: Color.fromARGB(255, 45, 46, 53),
     scaffoldBackgroundColor: Color(0xFF18191E),
@@ -648,6 +660,8 @@ List<Locale> supportedLocales = const [
   Locale('en', 'US'),
   Locale('zh', 'CN'),
   Locale('zh', 'TW'),
+  Locale('zh', 'HK'),
+  Locale('zh', 'MO'),
   Locale('zh', 'SG'),
   Locale('fr'),
   Locale('de'),

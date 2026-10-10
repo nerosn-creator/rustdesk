@@ -780,6 +780,13 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("RustDesk could not load a GStreamer component needed for screen capture ({})", "RustDesk 无法加载屏幕捕获所需的 GStreamer 组件 ({})"),
         ("Relay fallback delay in seconds", "回落到中继前的等待时间（秒）"),
         ("relay-fallback-delay-tip", "已经建立的中继连接会等待直连的 WebRTC 多久，超过这个时间就改用中继。调大可以让较慢的直连有更多机会胜出；调小则在无法直连的网络上更快回落到中继。留空表示使用默认值 2.5 秒。"),
-        ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", "开始语音通话前请在\"共享屏幕\"页面启用\"音频录制\"。")
+        ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", "开始语音通话前请在\"共享屏幕\"页面启用\"音频录制\"。"),
+        ("Quick Text Input", "快捷文字输入"),
+        ("Quick input bar (Voice/Handwriting)", "快捷输入栏（支持手写/语音）"),
+        ("Voice and handwriting input supported", "支持中文手写及语音输入"),
+        ("Send Text", "发送文字"),
+        ("Send and Enter", "发送并回车"),
+        ("Clear", "清空"),
+        ("Input text here to send to remote desktop...", "在此输入文字以发送到远程桌面...")
     ].iter().cloned().collect();
 }

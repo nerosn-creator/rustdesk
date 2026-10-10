@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -66,6 +67,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Orientation? _currentOrientation;
   final _uniqueKey = UniqueKey();
   Timer? _iosKeyboardWorkaroundTimer;
+  Timer? _imeCommitDebounceTimer;
 
   final _blockableOverlayState = BlockableOverlayState();
 
@@ -166,6 +168,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     await gFFI.close();
     _timer?.cancel();
     _iosKeyboardWorkaroundTimer?.cancel();
+    _imeCommitDebounceTimer?.cancel();
     gFFI.dialogManager.dismissAll();
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
         overlays: SystemUiOverlay.values);
@@ -275,111 +278,223 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     setState(() {});
   }
 
-  void _handleIOSSoftKeyboardInput(String newValue) {
+  void _flushPendingInput(String fullText) {
+    _imeCommitDebounceTimer?.cancel();
+    _imeCommitDebounceTimer = null;
+
     var oldValue = _value;
-    _value = newValue;
-    var i = newValue.length - 1;
-    for (; i >= 0 && newValue[i] != '1'; --i) {}
-    var j = oldValue.length - 1;
-    for (; j >= 0 && oldValue[j] != '1'; --j) {}
-    if (i < j) j = i;
-    var subNewValue = newValue.substring(j + 1);
-    var subOldValue = oldValue.substring(j + 1);
+    _value = fullText;
 
-    // get common prefix of subNewValue and subOldValue
-    var common = 0;
-    for (;
-        common < subOldValue.length &&
-            common < subNewValue.length &&
-            subNewValue[common] == subOldValue[common];
-        ++common) {}
-
-    // get newStr from subNewValue
-    var newStr = "";
-    if (subNewValue.length > common) {
-      newStr = subNewValue.substring(common);
+    if (oldValue.isNotEmpty &&
+        fullText.isNotEmpty &&
+        oldValue[0] == '1' &&
+        fullText[0] != '1') {
+      // clipboard or pasted string
+      oldValue = '';
     }
 
-    // Set the value to the old value and early return if is still composing. (1 && 2)
-    // 1. The composing range is valid
-    // 2. The new string is shorter than the composing range.
-    if (_textController.value.isComposingRangeValid) {
-      final composingLength = _textController.value.composing.end -
-          _textController.value.composing.start;
-      if (composingLength > newStr.length) {
-        _value = oldValue;
-        return;
+    if (fullText == oldValue) {
+      return;
+    }
+
+    // 1. Calculate common prefix
+    int commonPrefix = 0;
+    final minLen = min(oldValue.length, fullText.length);
+    while (commonPrefix < minLen &&
+        oldValue[commonPrefix] == fullText[commonPrefix]) {
+      commonPrefix++;
+    }
+
+    // 2. Calculate common suffix from remaining characters
+    int oldRemain = oldValue.length - commonPrefix;
+    int newRemain = fullText.length - commonPrefix;
+    int commonSuffix = 0;
+    while (commonSuffix < oldRemain &&
+        commonSuffix < newRemain &&
+        oldValue[oldValue.length - 1 - commonSuffix] ==
+            fullText[fullText.length - 1 - commonSuffix]) {
+      commonSuffix++;
+    }
+
+    int deleteCount = oldValue.length - commonPrefix - commonSuffix;
+    String insertText = fullText.substring(
+        commonPrefix, fullText.length - commonSuffix);
+
+    // Delete replaced/removed characters (e.g. Backspace or voice correction)
+    if (deleteCount > 0) {
+      for (int i = 0; i < deleteCount; i++) {
+        inputModel.inputKey('VK_BACK');
       }
     }
 
-    // Delete the different part in the old value.
-    for (i = 0; i < subOldValue.length - common; ++i) {
-      inputModel.inputKey('VK_BACK');
-    }
-
-    // Input the new string.
-    if (newStr.length > 1) {
-      bind.sessionInputString(sessionId: sessionId, value: newStr);
-    } else {
-      inputChar(newStr);
-    }
-  }
-
-  void _handleNonIOSSoftKeyboardInput(String newValue) {
-    var oldValue = _value;
-    _value = newValue;
-    if (oldValue.isNotEmpty &&
-        newValue.isNotEmpty &&
-        oldValue[0] == '1' &&
-        newValue[0] != '1') {
-      // clipboard
-      oldValue = '';
-    }
-    // This length-only diff assumes the IME appends at the end. If an IME
-    // leaves the caret inside paired punctuation, later insertions can replay
-    // the closing symbol: "()" -> "(a)" sends ")" instead of "a". This is a
-    // client text-diff issue, independent of the host keyboard layout.
-    if (newValue.length == oldValue.length) {
-      // ?
-    } else if (newValue.length < oldValue.length) {
-      final char = 'VK_BACK';
-      inputModel.inputKey(char);
-    } else {
-      final content = newValue.substring(oldValue.length);
-      if (content.length > 1) {
-        if (oldValue != '' &&
-            content.length == 2 &&
-            (content == '""' ||
-                content == '()' ||
-                content == '[]' ||
-                content == '<>' ||
-                content == "{}" ||
-                content == '”“' ||
-                content == '《》' ||
-                content == '（）' ||
-                content == '【】')) {
-          // can not only input content[0], because when input ], [ are also auo insert, which cause ] never be input
-          bind.sessionInputString(sessionId: sessionId, value: content);
+    // Insert new characters
+    if (insertText.isNotEmpty) {
+      if (insertText.length > 1) {
+        if (oldValue.isNotEmpty &&
+            insertText.length == 2 &&
+            (insertText == '""' ||
+                insertText == '()' ||
+                insertText == '[]' ||
+                insertText == '<>' ||
+                insertText == "{}" ||
+                insertText == '”“' ||
+                insertText == '《》' ||
+                insertText == '（）' ||
+                insertText == '【】')) {
+          bind.sessionInputString(sessionId: sessionId, value: insertText);
           _openKeyboardUnlocked();
           return;
         }
-        bind.sessionInputString(sessionId: sessionId, value: content);
+        bind.sessionInputString(sessionId: sessionId, value: insertText);
       } else {
-        inputChar(content);
+        inputChar(insertText);
       }
     }
   }
 
-  // handle mobile virtual keyboard
+  // Handle mobile virtual keyboard with intelligent composing detection & debounce
+  // This completely resolves Chinese handwriting stroke lag and streaming voice input lag/repetition.
   void handleSoftKeyboardInput(String newValue) {
     if (!inputModel.keyboardInputAllowed) {
       return;
     }
-    if (isIOS) {
-      _handleIOSSoftKeyboardInput(newValue);
-    } else {
-      _handleNonIOSSoftKeyboardInput(newValue);
+
+    // Check if IME is actively composing (Chinese pinyin, handwriting stroke candidate,
+    // or streaming voice recognition in progress)
+    final composing = _textController.value.isComposingRangeValid &&
+        _textController.value.composing.start < _textController.value.composing.end;
+
+    if (composing) {
+      // During active handwriting strokes or streaming speech recognition,
+      // do not flood remote host with rapid intermediate fragments.
+      // Use a short debounce timer to commit when user briefly pauses (220ms).
+      _imeCommitDebounceTimer?.cancel();
+      _imeCommitDebounceTimer = Timer(const Duration(milliseconds: 220), () {
+        if (!mounted) return;
+        _flushPendingInput(_textController.text);
+      });
+      return;
     }
+
+    // Not composing (or candidate was just selected/committed):
+    _imeCommitDebounceTimer?.cancel();
+    _imeCommitDebounceTimer = null;
+    _flushPendingInput(newValue);
+  }
+
+  // Dedicated Quick Text Input Dialog for seamless Chinese handwriting & speech recognition
+  void showQuickTextInputDialog() {
+    final TextEditingController textEditingController = TextEditingController();
+    bool sendEnter = false;
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Row(
+                children: [
+                  const Icon(Icons.keyboard_alt_outlined, color: MyTheme.accent),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      translate('Quick Text Input'),
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      translate('Voice and handwriting input supported'),
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: textEditingController,
+                      maxLines: 4,
+                      autofocus: true,
+                      decoration: InputDecoration(
+                        hintText: translate('Input text here to send to remote desktop...'),
+                        hintStyle: const TextStyle(fontSize: 13),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        contentPadding: const EdgeInsets.all(10),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Checkbox(
+                          value: sendEnter,
+                          onChanged: (val) {
+                            setDialogState(() {
+                              sendEnter = val ?? false;
+                            });
+                          },
+                        ),
+                        GestureDetector(
+                          onTap: () {
+                            setDialogState(() {
+                              sendEnter = !sendEnter;
+                            });
+                          },
+                          child: Text(
+                            translate('Send and Enter'),
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () {
+                            textEditingController.clear();
+                          },
+                          child: Text(translate('Clear')),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: Text(translate('Cancel')),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: MyTheme.accent,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  onPressed: () {
+                    final text = textEditingController.text;
+                    if (text.isNotEmpty) {
+                      bind.sessionInputString(sessionId: sessionId, value: text);
+                      if (sendEnter) {
+                        inputModel.inputKey('VK_RETURN');
+                      }
+                      textEditingController.clear();
+                    }
+                    Navigator.of(ctx).pop();
+                  },
+                  child: Text(
+                    translate('Send Text'),
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   void inputChar(String char) {
@@ -590,6 +705,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                   icon: Icon(Icons.keyboard),
                                   onPressed: openKeyboard),
                               IconButton(
+                                  color: Colors.white,
+                                  tooltip: translate('Quick Text Input'),
+                                  icon: Icon(Icons.edit_note),
+                                  onPressed: showQuickTextInputDialog),
+                              IconButton(
                                 color: Colors.white,
                                 icon: const Icon(Icons.build),
                                 onPressed: () => gFFI.dialogManager
@@ -601,6 +721,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                   color: Colors.white,
                                   icon: Icon(Icons.keyboard),
                                   onPressed: openKeyboard),
+                              IconButton(
+                                  color: Colors.white,
+                                  tooltip: translate('Quick Text Input'),
+                                  icon: Icon(Icons.edit_note),
+                                  onPressed: showQuickTextInputDialog),
                               IconButton(
                                 color: Colors.white,
                                 icon: Icon(gFFI.ffiModel.touchMode
@@ -672,36 +797,42 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
             KeyHelpTools(
                 keyboardIsVisible: keyboardIsVisible,
-                showGestureHelp: _showGestureHelp),
-            SizedBox(
-              width: 0,
-              height: 0,
-              child: !_showEdit
-                  ? Container()
-                  : TextFormField(
-                      textInputAction: TextInputAction.newline,
-                      autocorrect: false,
-                      // Flutter 3.16.9 Android.
-                      // `enableSuggestions` causes secure keyboard to be shown.
-                      // https://github.com/flutter/flutter/issues/139143
-                      // https://github.com/flutter/flutter/issues/146540
-                      // enableSuggestions: false,
-                      autofocus: true,
-                      focusNode: _mobileFocusNode,
-                      maxLines: null,
-                      controller: _textController,
-                      // trick way to make backspace work always
-                      keyboardType: TextInputType.multiline,
-                      // `onChanged` may be called depending on the input method if this widget is wrapped in
-                      // `Focus(onKeyEvent: ..., child: ...)`
-                      // For `Backspace` button in the soft keyboard:
-                      // en/fr input method:
-                      //      1. The button will not trigger `onKeyEvent` if the text field is not empty.
-                      //      2. The button will trigger `onKeyEvent` if the text field is empty.
-                      // ko/zh/ja input method: the button will trigger `onKeyEvent`
-                      //                     and the event will not popup if `KeyEventResult.handled` is returned.
-                      onChanged: handleSoftKeyboardInput,
-                    ).workaroundFreezeLinuxMint(),
+                showGestureHelp: _showGestureHelp,
+                onQuickTextInput: showQuickTextInputDialog),
+            Positioned(
+              left: -200,
+              top: -200,
+              width: 50,
+              height: 50,
+              child: Opacity(
+                opacity: 0.0,
+                child: !_showEdit
+                    ? Container()
+                    : TextFormField(
+                        textInputAction: TextInputAction.newline,
+                        autocorrect: false,
+                        // Flutter 3.16.9 Android.
+                        // `enableSuggestions` causes secure keyboard to be shown.
+                        // https://github.com/flutter/flutter/issues/139143
+                        // https://github.com/flutter/flutter/issues/146540
+                        // enableSuggestions: false,
+                        autofocus: true,
+                        focusNode: _mobileFocusNode,
+                        maxLines: null,
+                        controller: _textController,
+                        // trick way to make backspace work always
+                        keyboardType: TextInputType.multiline,
+                        // `onChanged` may be called depending on the input method if this widget is wrapped in
+                        // `Focus(onKeyEvent: ..., child: ...)`
+                        // For `Backspace` button in the soft keyboard:
+                        // en/fr input method:
+                        //      1. The button will not trigger `onKeyEvent` if the text field is not empty.
+                        //      2. The button will trigger `onKeyEvent` if the text field is empty.
+                        // ko/zh/ja input method: the button will trigger `onKeyEvent`
+                        //                     and the event will not popup if `KeyEventResult.handled` is returned.
+                        onChanged: handleSoftKeyboardInput,
+                      ).workaroundFreezeLinuxMint(),
+              ),
             ),
           ];
           if (showCursorPaint) {
@@ -922,12 +1053,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 class KeyHelpTools extends StatefulWidget {
   final bool keyboardIsVisible;
   final bool showGestureHelp;
+  final VoidCallback? onQuickTextInput;
 
   /// need to show by external request, etc [keyboardIsVisible] or [changeTouchMode]
   bool get requestShow => keyboardIsVisible || showGestureHelp;
 
   KeyHelpTools(
-      {required this.keyboardIsVisible, required this.showGestureHelp});
+      {required this.keyboardIsVisible,
+      required this.showGestureHelp,
+      this.onQuickTextInput});
 
   @override
   State<KeyHelpTools> createState() => _KeyHelpToolsState();
@@ -1039,6 +1173,11 @@ class _KeyHelpToolsState extends State<KeyHelpTools> {
                 },
               ),
           active: _more),
+      if (widget.onQuickTextInput != null)
+        wrap(
+            'Text',
+            widget.onQuickTextInput!,
+            icon: Icons.edit_note),
     ];
     final fn = <Widget>[
       SizedBox(width: 9999),
