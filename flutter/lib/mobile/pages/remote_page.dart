@@ -383,12 +383,25 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   // Dedicated Quick Text Input Dialog for seamless Chinese handwriting & speech recognition
-  void showQuickTextInputDialog() {
+  void showQuickTextInputDialog() async {
     final TextEditingController textEditingController = TextEditingController();
+    final FocusNode dialogFocusNode = FocusNode();
     bool sendEnter = false;
-    showDialog(
+
+    _mobileFocusNode.unfocus();
+    _physicalFocusNode.unfocus();
+    if (isAndroid) {
+      await gFFI.invokeMethod("enable_soft_keyboard", true);
+    }
+
+    await showDialog(
       context: context,
       builder: (ctx) {
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (dialogFocusNode.canRequestFocus) {
+            dialogFocusNode.requestFocus();
+          }
+        });
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
@@ -415,9 +428,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     ),
                     const SizedBox(height: 10),
                     TextField(
+                      focusNode: dialogFocusNode,
                       controller: textEditingController,
                       maxLines: 4,
                       autofocus: true,
+                      keyboardType: TextInputType.multiline,
+                      enableInteractiveSelection: true,
                       decoration: InputDecoration(
                         hintText: translate('Input text here to send to remote desktop...'),
                         hintStyle: const TextStyle(fontSize: 13),
@@ -495,6 +511,18 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         );
       },
     );
+
+    dialogFocusNode.dispose();
+    textEditingController.dispose();
+
+    if (isAndroid && !_showEdit) {
+      gFFI.invokeMethod("enable_soft_keyboard", false);
+    }
+    if (_showEdit) {
+      _mobileFocusNode.requestFocus();
+    } else {
+      _physicalFocusNode.requestFocus();
+    }
   }
 
   void inputChar(String char) {
