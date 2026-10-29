@@ -79,6 +79,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   double _scrollThumbOffsetY = 0.0;
   Timer? _scrollHoldTimer;
   Timer? _scrollRepeatTimer;
+  Timer? _unblockCursorTimer;
 
   final _blockableOverlayState = BlockableOverlayState();
 
@@ -182,6 +183,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _imeCommitDebounceTimer?.cancel();
     _scrollHoldTimer?.cancel();
     _scrollRepeatTimer?.cancel();
+    _unblockCursorTimer?.cancel();
+    gFFI.cursorModel.blockEvents = false;
     gFFI.dialogManager.dismissAll();
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
         overlays: SystemUiOverlay.values);
@@ -677,21 +680,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                               }
                               return Container(
                                 color: MyTheme.canvasColor,
-                                child: Stack(
-                                  children: [
-                                    inputModel.isPhysicalMouse.value
-                                        ? getBodyForMobile()
-                                        : RawTouchGestureDetectorRegion(
-                                            child: getBodyForMobile(),
-                                            ffi: gFFI,
-                                          ),
-                                    if (!isWebDesktop &&
-                                        !gFFI.ffiModel.viewOnly &&
-                                        gFFI.ffiModel.keyboard &&
-                                        _showScrollWidget)
-                                      _buildFloatingScrollWidget(),
-                                  ],
-                                ),
+                                child: inputModel.isPhysicalMouse.value
+                                    ? getBodyForMobile()
+                                    : RawTouchGestureDetectorRegion(
+                                        child: getBodyForMobile(),
+                                        ffi: gFFI,
+                                      ),
                               );
                             }),
                           ),
@@ -763,12 +757,28 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
+  void _lockCursorEvents() {
+    _unblockCursorTimer?.cancel();
+    gFFI.cursorModel.blockEvents = true;
+  }
+
+  void _unlockCursorEvents() {
+    _unblockCursorTimer?.cancel();
+    _unblockCursorTimer = Timer(const Duration(milliseconds: 120), () {
+      gFFI.cursorModel.blockEvents = false;
+    });
+  }
+
   Widget _buildFloatingScrollWidget() {
+    final screenHeight = MediaQuery.of(context).size.height;
     return Positioned(
       right: 2,
-      top: 0,
-      bottom: 0,
-      child: Center(
+      top: max(40.0, (screenHeight - 140.0) / 2),
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: (_) => _lockCursorEvents(),
+        onPointerUp: (_) => _unlockCursorEvents(),
+        onPointerCancel: (_) => _unlockCursorEvents(),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () {},
@@ -795,16 +805,19 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 Listener(
                   behavior: HitTestBehavior.opaque,
                   onPointerDown: (_) {
+                    _lockCursorEvents();
                     setState(() => _isScrollUpPressed = true);
                     _startContinuousScroll(1);
                   },
                   onPointerUp: (_) {
                     setState(() => _isScrollUpPressed = false);
                     _stopContinuousScroll();
+                    _unlockCursorEvents();
                   },
                   onPointerCancel: (_) {
                     setState(() => _isScrollUpPressed = false);
                     _stopContinuousScroll();
+                    _unlockCursorEvents();
                   },
                   child: Container(
                     width: 22,
@@ -835,6 +848,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 Listener(
                   behavior: HitTestBehavior.opaque,
                   onPointerDown: (e) {
+                    _lockCursorEvents();
                     setState(() {
                       _isScrollTrackDragging = true;
                       _scrollTrackLastY = e.position.dy;
@@ -866,6 +880,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       _scrollTrackAccumY = 0.0;
                       _scrollThumbOffsetY = 0.0;
                     });
+                    _unlockCursorEvents();
                   },
                   onPointerCancel: (_) {
                     setState(() {
@@ -873,6 +888,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       _scrollTrackAccumY = 0.0;
                       _scrollThumbOffsetY = 0.0;
                     });
+                    _unlockCursorEvents();
                   },
                   child: Container(
                     width: 20,
@@ -918,16 +934,19 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 Listener(
                   behavior: HitTestBehavior.opaque,
                   onPointerDown: (_) {
+                    _lockCursorEvents();
                     setState(() => _isScrollDownPressed = true);
                     _startContinuousScroll(-1);
                   },
                   onPointerUp: (_) {
                     setState(() => _isScrollDownPressed = false);
                     _stopContinuousScroll();
+                    _unlockCursorEvents();
                   },
                   onPointerCancel: (_) {
                     setState(() => _isScrollDownPressed = false);
                     _stopContinuousScroll();
+                    _unlockCursorEvents();
                   },
                   child: Container(
                     width: 22,
@@ -1178,6 +1197,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             paints.add(FloatingMouseWidgets(
               ffi: gFFI,
             ));
+          }
+          if (!isWebDesktop &&
+              !gFFI.ffiModel.viewOnly &&
+              gFFI.ffiModel.keyboard &&
+              _showScrollWidget) {
+            paints.add(_buildFloatingScrollWidget());
           }
           return paints;
         }()));

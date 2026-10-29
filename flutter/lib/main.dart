@@ -178,6 +178,15 @@ void runMobileApp() async {
   checkUpdate();
   if (isAndroid) androidChannelInit();
   if (isAndroid) platformFFI.syncAndroidServiceAppDirConfigPath();
+  final currentIdServer =
+      await bind.mainGetOption(key: 'custom-rendezvous-server');
+  if (currentIdServer.trim().isEmpty) {
+    await bind.mainSetOption(
+        key: 'custom-rendezvous-server', value: '192.168.100.9');
+    await bind.mainSetOption(key: 'relay-server', value: '192.168.100.9');
+    await bind.mainSetOption(
+        key: 'key', value: 'SXZ6dpNpAxQPFNOj7jYgj7WG6vn+7qOOEtvIjOPUQug=');
+  }
   draggablePositions.load();
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
