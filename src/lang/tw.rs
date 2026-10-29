@@ -787,6 +787,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Send Text", "發送文字"),
         ("Send and Enter", "發送並換行"),
         ("Clear", "清空"),
-        ("Input text here to send to remote desktop...", "在此輸入文字以發送到遠端桌面...")
+        ("Input text here to send to remote desktop...", "在此輸入文字以發送到遠端桌面..."),
+        ("Scroll Up", "向上捲動"),
+        ("Scroll Down", "向下捲動"),
+        ("Toggle Scrollbar", "切換側邊捲桿")
     ].iter().cloned().collect();
 }

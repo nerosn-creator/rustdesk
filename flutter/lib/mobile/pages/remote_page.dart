@@ -69,6 +69,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _iosKeyboardWorkaroundTimer;
   Timer? _imeCommitDebounceTimer;
 
+  // RemoteDesk-style mobile scroll controls
+  bool _showScrollWidget = true;
+  bool _isScrollUpPressed = false;
+  bool _isScrollDownPressed = false;
+  bool _isScrollTrackDragging = false;
+  double _scrollTrackLastY = 0.0;
+  double _scrollTrackAccumY = 0.0;
+  double _scrollThumbOffsetY = 0.0;
+  Timer? _scrollHoldTimer;
+  Timer? _scrollRepeatTimer;
+
   final _blockableOverlayState = BlockableOverlayState();
 
   final keyboardVisibilityController = KeyboardVisibilityController();
@@ -169,6 +180,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _timer?.cancel();
     _iosKeyboardWorkaroundTimer?.cancel();
     _imeCommitDebounceTimer?.cancel();
+    _scrollHoldTimer?.cancel();
+    _scrollRepeatTimer?.cancel();
     gFFI.dialogManager.dismissAll();
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
         overlays: SystemUiOverlay.values);
@@ -664,12 +677,21 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                               }
                               return Container(
                                 color: MyTheme.canvasColor,
-                                child: inputModel.isPhysicalMouse.value
-                                    ? getBodyForMobile()
-                                    : RawTouchGestureDetectorRegion(
-                                        child: getBodyForMobile(),
-                                        ffi: gFFI,
-                                      ),
+                                child: Stack(
+                                  children: [
+                                    inputModel.isPhysicalMouse.value
+                                        ? getBodyForMobile()
+                                        : RawTouchGestureDetectorRegion(
+                                            child: getBodyForMobile(),
+                                            ffi: gFFI,
+                                          ),
+                                    if (!isWebDesktop &&
+                                        !gFFI.ffiModel.viewOnly &&
+                                        gFFI.ffiModel.keyboard &&
+                                        _showScrollWidget)
+                                      _buildFloatingScrollWidget(),
+                                  ],
+                                ),
                               );
                             }),
                           ),
@@ -697,6 +719,248 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
+  void _triggerScroll(int dir) {
+    if (gFFI.ffiModel.viewOnly || !gFFI.ffiModel.keyboard) return;
+    inputModel.scroll(dir);
+  }
+
+  void _startContinuousScroll(int dir) {
+    _stopContinuousScroll();
+    _triggerScroll(dir);
+    HapticFeedback.selectionClick();
+    _scrollHoldTimer = Timer(const Duration(milliseconds: 240), () {
+      _scrollRepeatTimer =
+          Timer.periodic(const Duration(milliseconds: 75), (_) {
+        _triggerScroll(dir);
+      });
+    });
+  }
+
+  void _stopContinuousScroll() {
+    _scrollHoldTimer?.cancel();
+    _scrollHoldTimer = null;
+    _scrollRepeatTimer?.cancel();
+    _scrollRepeatTimer = null;
+  }
+
+  Widget _buildBottomScrollButton({
+    required IconData icon,
+    required int direction,
+    required String tooltip,
+  }) {
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (_) => _startContinuousScroll(direction),
+      onPointerUp: (_) => _stopContinuousScroll(),
+      onPointerCancel: (_) => _stopContinuousScroll(),
+      child: Tooltip(
+        message: tooltip,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+          child: Icon(icon, color: Colors.white, size: 24),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFloatingScrollWidget() {
+    return Positioned(
+      right: 2,
+      top: 0,
+      bottom: 0,
+      child: Center(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {},
+          onVerticalDragUpdate: (_) {},
+          child: Container(
+            width: 26,
+            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xB80F172A),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(color: const Color(0x4D38BDF8), width: 1),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.4),
+                  blurRadius: 12,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Scroll Up button (tap + hold continuous scroll)
+                Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: (_) {
+                    setState(() => _isScrollUpPressed = true);
+                    _startContinuousScroll(1);
+                  },
+                  onPointerUp: (_) {
+                    setState(() => _isScrollUpPressed = false);
+                    _stopContinuousScroll();
+                  },
+                  onPointerCancel: (_) {
+                    setState(() => _isScrollUpPressed = false);
+                    _stopContinuousScroll();
+                  },
+                  child: Container(
+                    width: 22,
+                    height: 26,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: _isScrollUpPressed
+                          ? const Color(0x5938BDF8)
+                          : const Color(0x1F38BDF8),
+                      borderRadius: BorderRadius.circular(9),
+                      border: Border.all(
+                        color: const Color(0x4038BDF8),
+                        width: 1,
+                      ),
+                    ),
+                    child: const Text(
+                      '▲',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: Color(0xFF7DD3FC),
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                // Middle vertical drag track + thumb
+                Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: (e) {
+                    setState(() {
+                      _isScrollTrackDragging = true;
+                      _scrollTrackLastY = e.position.dy;
+                      _scrollTrackAccumY = 0.0;
+                      _scrollThumbOffsetY = 0.0;
+                    });
+                  },
+                  onPointerMove: (e) {
+                    if (!_isScrollTrackDragging) return;
+                    final dy = e.position.dy - _scrollTrackLastY;
+                    _scrollTrackLastY = e.position.dy;
+                    _scrollTrackAccumY += dy;
+                    final clampedOffset =
+                        (_scrollTrackAccumY * 0.6).clamp(-20.0, 20.0);
+                    setState(() {
+                      _scrollThumbOffsetY = clampedOffset;
+                    });
+                    const double step = 10.0;
+                    while (_scrollTrackAccumY.abs() >= step) {
+                      final int dir = _scrollTrackAccumY > 0 ? -1 : 1;
+                      _triggerScroll(dir);
+                      _scrollTrackAccumY -=
+                          (_scrollTrackAccumY > 0 ? step : -step);
+                    }
+                  },
+                  onPointerUp: (_) {
+                    setState(() {
+                      _isScrollTrackDragging = false;
+                      _scrollTrackAccumY = 0.0;
+                      _scrollThumbOffsetY = 0.0;
+                    });
+                  },
+                  onPointerCancel: (_) {
+                    setState(() {
+                      _isScrollTrackDragging = false;
+                      _scrollTrackAccumY = 0.0;
+                      _scrollThumbOffsetY = 0.0;
+                    });
+                  },
+                  child: Container(
+                    width: 20,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      color: const Color(0x801E293B),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: const Color(0x2694A3B8),
+                        width: 1,
+                      ),
+                    ),
+                    child: Center(
+                      child: Transform.translate(
+                        offset: Offset(0, _scrollThumbOffsetY),
+                        child: Container(
+                          width: 14,
+                          height: 22,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(7),
+                            gradient: const LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Color(0xBF38BDF8),
+                                Color(0xBF0284C7),
+                              ],
+                            ),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x4D38BDF8),
+                                blurRadius: 4,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                // Scroll Down button (tap + hold continuous scroll)
+                Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: (_) {
+                    setState(() => _isScrollDownPressed = true);
+                    _startContinuousScroll(-1);
+                  },
+                  onPointerUp: (_) {
+                    setState(() => _isScrollDownPressed = false);
+                    _stopContinuousScroll();
+                  },
+                  onPointerCancel: (_) {
+                    setState(() => _isScrollDownPressed = false);
+                    _stopContinuousScroll();
+                  },
+                  child: Container(
+                    width: 22,
+                    height: 26,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: _isScrollDownPressed
+                          ? const Color(0x5938BDF8)
+                          : const Color(0x1F38BDF8),
+                      borderRadius: BorderRadius.circular(9),
+                      border: Border.all(
+                        color: const Color(0x4038BDF8),
+                        width: 1,
+                      ),
+                    ),
+                    child: const Text(
+                      '▼',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: Color(0xFF7DD3FC),
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget getBottomAppBar() {
     final ffiModel = Provider.of<FfiModel>(context);
     return BottomAppBar(
@@ -706,92 +970,132 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         mainAxisSize: MainAxisSize.max,
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: <Widget>[
-          Row(
-              children: <Widget>[
-                    IconButton(
-                      color: Colors.white,
-                      icon: Icon(Icons.clear),
-                      onPressed: () {
-                        clientClose(sessionId, gFFI);
-                      },
-                    ),
-                    IconButton(
-                      color: Colors.white,
-                      icon: Icon(Icons.tv),
-                      onPressed: () {
-                        setState(() => _showEdit = false);
-                        showOptions(context, widget.id, gFFI.dialogManager);
-                      },
-                    )
-                  ] +
-                  (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
-                      ? []
-                      : gFFI.ffiModel.isPeerAndroid
-                          ? [
-                              IconButton(
-                                  color: Colors.white,
-                                  icon: Icon(Icons.keyboard),
-                                  onPressed: openKeyboard),
-                              IconButton(
-                                  color: Colors.white,
-                                  tooltip: translate('Quick Text Input'),
-                                  icon: Icon(Icons.edit_note),
-                                  onPressed: showQuickTextInputDialog),
-                              IconButton(
-                                color: Colors.white,
-                                icon: const Icon(Icons.build),
-                                onPressed: () => gFFI.dialogManager
-                                    .toggleMobileActionsOverlay(ffi: gFFI),
-                              )
-                            ]
-                          : [
-                              IconButton(
-                                  color: Colors.white,
-                                  icon: Icon(Icons.keyboard),
-                                  onPressed: openKeyboard),
-                              IconButton(
-                                  color: Colors.white,
-                                  tooltip: translate('Quick Text Input'),
-                                  icon: Icon(Icons.edit_note),
-                                  onPressed: showQuickTextInputDialog),
-                              IconButton(
-                                color: Colors.white,
-                                icon: Icon(gFFI.ffiModel.touchMode
-                                    ? Icons.touch_app
-                                    : Icons.mouse),
-                                onPressed: () => setState(
-                                    () => _showGestureHelp = !_showGestureHelp),
-                              ),
-                            ]) +
-                  (isWeb
-                      ? []
-                      : <Widget>[
-                          futureBuilder(
-                              future: gFFI.invokeMethod(
-                                  "get_value", "KEY_IS_SUPPORT_VOICE_CALL"),
-                              hasData: (isSupportVoiceCall) => IconButton(
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                  children: <Widget>[
+                        IconButton(
+                          color: Colors.white,
+                          icon: Icon(Icons.clear),
+                          onPressed: () {
+                            clientClose(sessionId, gFFI);
+                          },
+                        ),
+                        IconButton(
+                          color: Colors.white,
+                          icon: Icon(Icons.tv),
+                          onPressed: () {
+                            setState(() => _showEdit = false);
+                            showOptions(context, widget.id, gFFI.dialogManager);
+                          },
+                        )
+                      ] +
+                      (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
+                          ? []
+                          : gFFI.ffiModel.isPeerAndroid
+                              ? [
+                                  IconButton(
+                                      color: Colors.white,
+                                      icon: Icon(Icons.keyboard),
+                                      onPressed: openKeyboard),
+                                  IconButton(
+                                      color: Colors.white,
+                                      tooltip: translate('Quick Text Input'),
+                                      icon: Icon(Icons.edit_note),
+                                      onPressed: showQuickTextInputDialog),
+                                  _buildBottomScrollButton(
+                                      icon: Icons.keyboard_arrow_up,
+                                      direction: 1,
+                                      tooltip: translate('Scroll Up')),
+                                  _buildBottomScrollButton(
+                                      icon: Icons.keyboard_arrow_down,
+                                      direction: -1,
+                                      tooltip: translate('Scroll Down')),
+                                  IconButton(
+                                    color: _showScrollWidget
+                                        ? const Color(0xFF7DD3FC)
+                                        : Colors.white,
+                                    tooltip: translate('Toggle Scrollbar'),
+                                    icon: const Icon(Icons.swap_vert),
+                                    onPressed: () => setState(() =>
+                                        _showScrollWidget = !_showScrollWidget),
+                                  ),
+                                  IconButton(
                                     color: Colors.white,
-                                    icon: isAndroid && isSupportVoiceCall
-                                        ? SvgPicture.asset('assets/chat.svg',
-                                            colorFilter: ColorFilter.mode(
-                                                Colors.white, BlendMode.srcIn))
-                                        : Icon(Icons.message),
-                                    onPressed: () =>
-                                        isAndroid && isSupportVoiceCall
-                                            ? showChatOptions(widget.id)
-                                            : onPressedTextChat(widget.id),
-                                  ))
-                        ]) +
-                  [
-                    IconButton(
-                      color: Colors.white,
-                      icon: Icon(Icons.more_vert),
-                      onPressed: () {
-                        setState(() => _showEdit = false);
-                        showActions(widget.id);
-                      },
-                    ),
-                  ]),
+                                    icon: const Icon(Icons.build),
+                                    onPressed: () => gFFI.dialogManager
+                                        .toggleMobileActionsOverlay(ffi: gFFI),
+                                  )
+                                ]
+                              : [
+                                  IconButton(
+                                      color: Colors.white,
+                                      icon: Icon(Icons.keyboard),
+                                      onPressed: openKeyboard),
+                                  IconButton(
+                                      color: Colors.white,
+                                      tooltip: translate('Quick Text Input'),
+                                      icon: Icon(Icons.edit_note),
+                                      onPressed: showQuickTextInputDialog),
+                                  _buildBottomScrollButton(
+                                      icon: Icons.keyboard_arrow_up,
+                                      direction: 1,
+                                      tooltip: translate('Scroll Up')),
+                                  _buildBottomScrollButton(
+                                      icon: Icons.keyboard_arrow_down,
+                                      direction: -1,
+                                      tooltip: translate('Scroll Down')),
+                                  IconButton(
+                                    color: _showScrollWidget
+                                        ? const Color(0xFF7DD3FC)
+                                        : Colors.white,
+                                    tooltip: translate('Toggle Scrollbar'),
+                                    icon: const Icon(Icons.swap_vert),
+                                    onPressed: () => setState(() =>
+                                        _showScrollWidget = !_showScrollWidget),
+                                  ),
+                                  IconButton(
+                                    color: Colors.white,
+                                    icon: Icon(gFFI.ffiModel.touchMode
+                                        ? Icons.touch_app
+                                        : Icons.mouse),
+                                    onPressed: () => setState(() =>
+                                        _showGestureHelp = !_showGestureHelp),
+                                  ),
+                                ]) +
+                      (isWeb
+                          ? []
+                          : <Widget>[
+                              futureBuilder(
+                                  future: gFFI.invokeMethod(
+                                      "get_value", "KEY_IS_SUPPORT_VOICE_CALL"),
+                                  hasData: (isSupportVoiceCall) => IconButton(
+                                        color: Colors.white,
+                                        icon: isAndroid && isSupportVoiceCall
+                                            ? SvgPicture.asset('assets/chat.svg',
+                                                colorFilter: ColorFilter.mode(
+                                                    Colors.white,
+                                                    BlendMode.srcIn))
+                                            : Icon(Icons.message),
+                                        onPressed: () =>
+                                            isAndroid && isSupportVoiceCall
+                                                ? showChatOptions(widget.id)
+                                                : onPressedTextChat(widget.id),
+                                      ))
+                            ]) +
+                      [
+                        IconButton(
+                          color: Colors.white,
+                          icon: Icon(Icons.more_vert),
+                          onPressed: () {
+                            setState(() => _showEdit = false);
+                            showActions(widget.id);
+                          },
+                        ),
+                      ]),
+            ),
+          ),
           Obx(() => IconButton(
                 color: Colors.white,
                 icon: Icon(Icons.expand_more),
