@@ -790,6 +790,13 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Input text here to send to remote desktop...", "在此输入文字以发送到远程桌面..."),
         ("Scroll Up", "向上滚动"),
         ("Scroll Down", "向下滚动"),
-        ("Toggle Scrollbar", "切换侧边卷杆")
+        ("Toggle Scrollbar", "切换侧边卷杆"),
+        ("Toggle Virtual Mouse", "切换虚拟鼠标"),
+        ("Virtual Mouse", "虚拟鼠标"),
+        ("Long press for help", "长按查看手势说明"),
+        ("Touch Mode Enabled", "已切换至触屏直触模式 (点击即点按)"),
+        ("Mouse Mode Enabled", "已切换至触控鼠标模式 (滑动鼠标)"),
+        ("Virtual Mouse Enabled", "已开启悬浮虚拟鼠标"),
+        ("Virtual Mouse Disabled", "已关闭悬浮虚拟鼠标"),
     ].iter().cloned().collect();
 }

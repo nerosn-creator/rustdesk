@@ -123,6 +123,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _physicalFocusNode.requestFocus();
     gFFI.inputModel.listenToMouse(true);
     gFFI.qualityMonitorModel.checkShowQualityMonitor(sessionId);
+    gFFI.ffiModel.virtualMouseMode.addListener(_onVirtualMouseModeChanged);
     keyboardSubscription =
         keyboardVisibilityController.onChange.listen(onSoftKeyboardChanged);
     gFFI.chatModel
@@ -167,6 +168,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     unawaited(bind.sessionClose(sessionId: sessionId));
     // https://github.com/flutter/flutter/issues/64935
     super.dispose();
+    gFFI.ffiModel.virtualMouseMode.removeListener(_onVirtualMouseModeChanged);
     gFFI.dialogManager.hideMobileActionsOverlay(store: false);
     gFFI.inputModel.listenToMouse(false);
     gFFI.imageModel.disposeImage();
@@ -737,6 +739,87 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _scrollRepeatTimer = null;
   }
 
+  void _onVirtualMouseModeChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _toggleTouchModeDirectly() {
+    gFFI.ffiModel.toggleTouchMode();
+    final isTouch = gFFI.ffiModel.touchMode;
+    final v = isTouch ? 'Y' : 'N';
+    bind.mainSetLocalOption(key: kOptionTouchMode, value: v);
+    if (isTouch) {
+      inputModel.setRelativeMouseMode(false);
+    }
+    HapticFeedback.lightImpact();
+    showToast(isTouch
+        ? translate('Touch Mode Enabled')
+        : translate('Mouse Mode Enabled'));
+    if (mounted) setState(() {});
+  }
+
+  void _toggleVirtualMouseDirectly() async {
+    await gFFI.ffiModel.virtualMouseMode.toggleVirtualMouse();
+    final isShow = gFFI.ffiModel.virtualMouseMode.showVirtualMouse;
+    if (!isShow) {
+      inputModel.setRelativeMouseMode(false);
+    }
+    HapticFeedback.lightImpact();
+    showToast(isShow
+        ? translate('Virtual Mouse Enabled')
+        : translate('Virtual Mouse Disabled'));
+    if (mounted) setState(() {});
+  }
+
+  Widget _buildTouchModeButton() {
+    final isTouch = gFFI.ffiModel.touchMode;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _toggleTouchModeDirectly,
+      onLongPress: () {
+        HapticFeedback.mediumImpact();
+        setState(() => _showGestureHelp = !_showGestureHelp);
+      },
+      child: Tooltip(
+        message:
+            '${isTouch ? translate('Touch mode') : translate('Mouse mode')} (${translate('Long press for help')})',
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+          child: Icon(
+            isTouch ? Icons.touch_app : Icons.mouse,
+            color: isTouch ? const Color(0xFF7DD3FC) : Colors.white,
+            size: 24,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVirtualMouseButton() {
+    final isVirtualMouseActive =
+        gFFI.ffiModel.virtualMouseMode.showVirtualMouse;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _toggleVirtualMouseDirectly,
+      onLongPress: () {
+        HapticFeedback.mediumImpact();
+        setState(() => _showGestureHelp = !_showGestureHelp);
+      },
+      child: Tooltip(
+        message:
+            '${translate('Virtual Mouse')} (${isVirtualMouseActive ? translate('Virtual Mouse Enabled') : translate('Virtual Mouse Disabled')})',
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+          child: Icon(
+            Icons.ads_click,
+            color: isVirtualMouseActive ? const Color(0xFF7DD3FC) : Colors.white,
+            size: 24,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildBottomScrollButton({
     required IconData icon,
     required int direction,
@@ -1074,14 +1157,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                     onPressed: () => setState(() =>
                                         _showScrollWidget = !_showScrollWidget),
                                   ),
-                                  IconButton(
-                                    color: Colors.white,
-                                    icon: Icon(gFFI.ffiModel.touchMode
-                                        ? Icons.touch_app
-                                        : Icons.mouse),
-                                    onPressed: () => setState(() =>
-                                        _showGestureHelp = !_showGestureHelp),
-                                  ),
+                                  _buildTouchModeButton(),
+                                  _buildVirtualMouseButton(),
                                 ]) +
                       (isWeb
                           ? []
@@ -1381,6 +1458,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 gFFI.ffiModel.toggleTouchMode();
                 final v = gFFI.ffiModel.touchMode ? 'Y' : 'N';
                 bind.mainSetLocalOption(key: kOptionTouchMode, value: v);
+                if (mounted) setState(() {});
               },
               virtualMouseMode: gFFI.ffiModel.virtualMouseMode,
               inputModel: gFFI.inputModel,
